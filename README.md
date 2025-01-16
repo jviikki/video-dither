@@ -8,11 +8,11 @@ converts each frame into a 1-bit dithered image.
 
 Here is an example input video frame:
 
-![Example input frame](images/example-input.png)
+![Example input frame](images/example-input.jpg)
 
 And here is the corresponding output frame:
 
-![Example output frame](images/example-output.png)
+![Example output frame](images/example-output.jpg)
 
 ## Compilation
 
