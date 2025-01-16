@@ -10,6 +10,7 @@
 #include <functional>
 
 #include "video.hpp"
+#include "concurrency.hpp"
 
 using namespace std;
 
@@ -62,7 +63,7 @@ void producer(cv::VideoCapture cap) {
     fifoCv.notify_all(); // Wake up all workers
 }
 
-void worker(int id) {
+void worker(int id, int width, int height) {
     std::vector<cv::Vec3f> palette = { cv::Vec3f(0, 0, 0), cv::Vec3f(255, 255, 255) };
 
     while (true) {
@@ -86,7 +87,7 @@ void worker(int id) {
         cv::Mat frame = task.second;
 
         // Resize and convert to grayscale
-        cv::resize(frame, frame, cv::Size(640, 480), 0, 0, cv::INTER_AREA);
+        cv::resize(frame, frame, cv::Size(width, height), 0, 0, cv::INTER_AREA);
         cv::cvtColor(frame, frame, cv::COLOR_BGR2GRAY);
         processFrame(frame, palette);
         cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR); // Convert back to BGR
@@ -135,14 +136,23 @@ void consumer(cv::VideoWriter out) {
     }
 }
 
-void processFramesConcurrently(const string& inputFile, const string& outputFile) {
-    cv::VideoCapture cap(inputFile);
+void processFramesConcurrently(const CommandLineArgs& args) {
+    cv::VideoCapture cap(args.input_file);
     if (!cap.isOpened()) {
         throw std::invalid_argument("Error opening input video file");
     }
 
     int fps = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
-    cv::VideoWriter out(outputFile, cv::VideoWriter::fourcc('M', 'J', 'P', 'G'), fps, cv::Size(640, 480), true);
+    int outputWidth = args.width.value_or(static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)));
+    int outputHeight = args.height.value_or(static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT))); 
+
+    cv::VideoWriter out(
+        args.output_file,
+        cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
+        fps,
+        cv::Size(outputWidth, outputHeight),
+        true
+    );
 
 
     if (!out.isOpened()) {
@@ -155,7 +165,7 @@ void processFramesConcurrently(const string& inputFile, const string& outputFile
 
     vector<thread> workers;
     for (int i = 0; i < NUM_WORKERS; ++i) {
-        workers.emplace_back(worker, i);
+        workers.emplace_back(worker, i, outputWidth, outputHeight);
     }
 
     thread consumerThread(consumer, out);

@@ -1,3 +1,9 @@
-#include <string>
+#ifndef CONCURRENCY_HPP
+#define CONCURRENCY_HPP
 
-void processFramesConcurrently(const std::string& inputFile, const std::string& outputFile);
+#include <string>
+#include "argparse.hpp"
+
+void processFramesConcurrently(const CommandLineArgs& args);
+
+#endif

@@ -35,8 +35,8 @@ CommandLineArgs parseArguments(int argc, char* argv[]) {
             } else {
                 args.width = std::stoi(arg.substr(8));
             }
-        } else if (arg == "--two-bit") {
-            args.two_bit = true;
+        } else if (arg == "--1-bit") {
+            args.one_bit = true;
         } else if (arg.find("--colors=") == 0) {
             args.colors = std::stoi(arg.substr(9));
         } else if (i == arguments.size() - 2) {
@@ -52,7 +52,7 @@ CommandLineArgs parseArguments(int argc, char* argv[]) {
         throw std::invalid_argument("Missing input or output file");
     }
 
-    if (args.two_bit && args.colors.has_value()) {
+    if (args.one_bit && args.colors.has_value()) {
         throw std::invalid_argument("Cannot specify both --two-bit and --colors");
     }
 
