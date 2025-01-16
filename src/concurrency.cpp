@@ -102,7 +102,7 @@ void worker(int id, int width, int height) {
     }
 }
 
-void consumer(cv::VideoWriter out) {
+void consumer(cv::VideoWriter out, int totalFrames) {
     int frameNumber = 0;
 
     while (true) {
@@ -132,7 +132,10 @@ void consumer(cv::VideoWriter out) {
         prioritySem.acquire(); // Signal space in the priority queue
 
         out.write(result.second);
-        std::cout << "Frame: " << frameNumber << std::endl;
+        std::cout
+            << "Writing frame: " << frameNumber << " / " << totalFrames
+            << " " << static_cast<int>(static_cast<double>(frameNumber) / totalFrames * 100) << "%\r";
+        std::cout.flush();
     }
 }
 
@@ -142,13 +145,32 @@ void processFramesConcurrently(const CommandLineArgs& args) {
         throw std::invalid_argument("Error opening input video file");
     }
 
+    int input_fourcc = static_cast<int>(cap.get(cv::CAP_PROP_FOURCC));
+    char codec[5] = {
+        static_cast<char>(input_fourcc & 0xFF),
+        static_cast<char>((input_fourcc >> 8) & 0xFF),
+        static_cast<char>((input_fourcc >> 16) & 0xFF),
+        static_cast<char>((input_fourcc >> 24) & 0xFF),
+        '\0'
+    };
+
     int fps = static_cast<int>(cap.get(cv::CAP_PROP_FPS));
-    int outputWidth = args.width.value_or(static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH)));
-    int outputHeight = args.height.value_or(static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT))); 
+    int inputWidth = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_WIDTH));
+    int inputHeight = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_HEIGHT));
+    int outputWidth = args.width.value_or(inputWidth);
+    int outputHeight = args.height.value_or(inputHeight);
+    int totalFrames = static_cast<int>(cap.get(cv::CAP_PROP_FRAME_COUNT));
+
+    std::cout
+        << "Input file: " << args.input_file << " (" << totalFrames << " frames)" << std::endl
+        << "Codec: " << codec << std::endl
+        << "FPS: " << fps << std::endl
+        << "Resolution: " << inputWidth << "x" << inputHeight << " -> " << outputWidth << "x" << outputHeight << std::endl;
 
     cv::VideoWriter out(
         args.output_file,
         cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
+        // input_fourcc,
         fps,
         cv::Size(outputWidth, outputHeight),
         true
@@ -168,7 +190,7 @@ void processFramesConcurrently(const CommandLineArgs& args) {
         workers.emplace_back(worker, i, outputWidth, outputHeight);
     }
 
-    thread consumerThread(consumer, out);
+    thread consumerThread(consumer, out, totalFrames);
 
     producerThread.join();
 
@@ -183,4 +205,6 @@ void processFramesConcurrently(const CommandLineArgs& args) {
 
     priorityCv.notify_one(); // Wake up the consumer
     consumerThread.join();
+
+    std::cout << std::endl;
 }
