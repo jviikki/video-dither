@@ -50,7 +50,47 @@ void sierraDither(cv::Mat& image, const std::vector<cv::Vec3f>& palette) {
     image.convertTo(image, CV_8U); // Convert back to uint8
 }
 
+std::vector<std::vector<int>> createBayerMatrix(int n) {
+    if ((n & (n - 1)) != 0 || n <= 0) {
+        throw std::invalid_argument("Size must be a power of 2.");
+    }
+
+    std::vector<std::vector<int>> matrix(n, std::vector<int>(n));
+
+    matrix[0][0] = 0;
+    matrix[0][1] = 2;
+    matrix[1][0] = 3;
+    matrix[1][1] = 1;
+
+    for (int size = 2; size < n; size *= 2) {
+        for (int i = 0; i < size; ++i) {
+            for (int j = 0; j < size; ++j) {
+                matrix[i][j + size] = matrix[i][j] + 2 * size * size;
+                matrix[i + size][j] = matrix[i][j] + 3 * size * size;
+                matrix[i + size][j + size] = matrix[i][j] + size * size;
+            }
+        }
+    }
+
+    return matrix;
+}
+
 void processFrame(cv::Mat& inputFrame, const std::vector<cv::Vec3f>& palette) {
+    int bayerMatrixSize = 2;
+    int bayerMatrixMaxValue = bayerMatrixSize * bayerMatrixSize;
+    auto bayerMatrix = createBayerMatrix(bayerMatrixSize);
+    const int height = inputFrame.rows;
+    const int width = inputFrame.cols;
+
+    for (int y = 0; y < height; ++y) {
+        for (int x = 0; x < width; ++x) {
+            int threshold = bayerMatrix[y % bayerMatrixSize][x % bayerMatrixSize] * 255 / (bayerMatrixMaxValue - 1);
+            inputFrame.at<uint8_t>(y, x) = (inputFrame.at<uint8_t>(y, x) > threshold) ? 255 : 0;
+        }
+    }
+}
+
+void processFrameOld(cv::Mat& inputFrame, const std::vector<cv::Vec3f>& palette) {
     sierraDither(inputFrame, palette);
 }
 
