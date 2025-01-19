@@ -85,7 +85,7 @@ void processFrame(cv::Mat& inputFrame, const std::vector<cv::Vec3f>& palette) {
     for (int y = 0; y < height; ++y) {
         for (int x = 0; x < width; ++x) {
             int threshold = bayerMatrix[y % bayerMatrixSize][x % bayerMatrixSize] * 255 / (bayerMatrixMaxValue - 1);
-            inputFrame.at<uint8_t>(y, x) = (inputFrame.at<uint8_t>(y, x) > threshold) ? 255 : 0;
+            inputFrame.at<uchar>(y, x) = (inputFrame.at<uchar>(y, x) > threshold) ? 255 : 0;
         }
     }
 }
