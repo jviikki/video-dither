@@ -1,0 +1,6 @@
+.venv/
+*.os
+*.o
+project/addons/bv1d/bin/
+godot-cpp/bin/
+.sconsign.dblite

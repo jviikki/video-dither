@@ -27,6 +27,7 @@ target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
 add_executable(bv1d-player
     src/bv1d_player.cpp
     src/bv1d_decoder.cpp
+    src/bv1d_decoder_core.cpp
 )
 target_link_libraries(bv1d-player ${OpenCV_LIBS})
 

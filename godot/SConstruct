@@ -1,0 +1,24 @@
+#!/usr/bin/env python
+import os
+
+env = SConscript("godot-cpp/SConstruct")
+
+# Add the core decoder source from the parent project
+env.Append(CPPPATH=["src/", "../src/"])
+
+sources = Glob("src/*.cpp") + ["../src/bv1d_decoder_core.cpp"]
+
+if env["platform"] == "macos":
+    library = env.SharedLibrary(
+        "project/addons/bv1d/bin/libbv1d.{}.{}.framework/libbv1d.{}.{}".format(
+            env["platform"], env["target"], env["platform"], env["target"]
+        ),
+        source=sources,
+    )
+else:
+    library = env.SharedLibrary(
+        "project/addons/bv1d/bin/libbv1d{}{}".format(env["suffix"], env["SHLIBSUFFIX"]),
+        source=sources,
+    )
+
+Default(library)

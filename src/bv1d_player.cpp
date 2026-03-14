@@ -15,7 +15,7 @@ int main(int argc, char* argv[]) {
 
     BV1DDecoder decoder;
     try {
-        decoder.open(path);
+        decoder.openOrThrow(path);
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << "\n";
         return 1;
@@ -32,7 +32,7 @@ int main(int argc, char* argv[]) {
 
     while (true) {
         if (!paused) {
-            cv::Mat frame = decoder.readFrame();
+            cv::Mat frame = decoder.readFrameMat();
             if (frame.empty()) break;
             cv::imshow(window_name, frame);
         }
@@ -45,7 +45,7 @@ int main(int argc, char* argv[]) {
         } else if (key == ' ') {
             paused = !paused;
         } else if (key == 83 && paused) {  // Right arrow (when paused)
-            cv::Mat frame = decoder.readFrame();
+            cv::Mat frame = decoder.readFrameMat();
             if (frame.empty()) break;
             cv::imshow(window_name, frame);
         }

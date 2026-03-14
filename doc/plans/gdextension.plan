@@ -1,0 +1,166 @@
+# Plan: Godot GDExtension for BV1D Video Playback
+
+## Context
+
+The project has a custom 1-bit video format (BV1D) with an existing C++ decoder (`src/bv1d_decoder.cpp`). The goal is to create a Godot 4.4 GDExtension that uses this decoder to play BV1D files as animated textures in Godot. The extension will live in a `godot/` subdirectory within this repo, built with SCons.
+
+## Key Challenge: OpenCV Dependency
+
+The existing decoder uses `cv::Mat` as its frame output type. OpenCV is not available in Godot, so we need to **refactor the decoder into two layers**:
+
+1. **`BV1DDecoderCore`** — pure C++ decoder (no OpenCV), returns `std::vector<uint8_t>` of grayscale pixel data
+2. **`BV1DDecoder`** — thin wrapper that converts core output to `cv::Mat` (preserves existing API for the player)
+
+The core decoder retains all the real logic (file I/O, header parsing, Huffman decoding, XOR delta, bit unpacking). Only `unpackBits()` and the return types change.
+
+## Implementation Steps
+
+### Step 1: Refactor decoder to separate OpenCV dependency
+
+**Files to modify:**
+- `src/bv1d_decoder.hpp` — extract `BV1DDecoderCore` base class
+- `src/bv1d_decoder.cpp` — move core logic to new files
+
+**Files to create:**
+- `src/bv1d_decoder_core.hpp` — pure C++ decoder class (no OpenCV)
+- `src/bv1d_decoder_core.cpp` — implementation
+
+**BV1DDecoderCore API:**
+```cpp
+class BV1DDecoderCore {
+public:
+    void open(const std::string& path);
+    // Returns grayscale pixels (0 or 255), width*height bytes, row-major
+    std::vector<uint8_t> readFrame();
+    std::vector<uint8_t> seekFrame(int index);
+    void close();
+    int getWidth() const;
+    int getHeight() const;
+    double getFPS() const;
+    int getFrameCount() const;
+    int getCurrentFrame() const;
+    // ... all existing private members unchanged except unpackBits returns vector
+};
+```
+
+**BV1DDecoder** becomes a thin wrapper:
+```cpp
+class BV1DDecoder : public BV1DDecoderCore {
+public:
+    cv::Mat readFrameMat();   // wraps readFrame() into cv::Mat
+    cv::Mat seekFrameMat();   // wraps seekFrame() into cv::Mat
+};
+```
+
+Update `bv1d_player.cpp` to use the new method names.
+
+### Step 2: Set up GDExtension project structure
+
+**Create directory structure:**
+```
+godot/
+├── project/                          # Godot test project
+│   ├── project.godot
+│   └── addons/
+│       └── bv1d/
+│           ├── bv1d.gdextension      # Extension manifest
+│           └── bin/                   # Built binaries go here
+├── src/
+│   ├── register_types.cpp            # GDExtension entry point
+│   ├── register_types.hpp
+│   ├── bv1d_player_node.cpp          # Custom Godot node
+│   └── bv1d_player_node.hpp
+├── godot-cpp/                        # Git submodule (godot-cpp 4.4)
+└── SConstruct                        # Build configuration
+```
+
+### Step 3: Implement BV1DPlayerNode
+
+**Inherits from:** `Sprite2D` — provides built-in texture rendering, transform, and visibility.
+
+**Exposed properties (editable in Godot editor):**
+- `file_path: String` — path to .bv1d file
+- `autoplay: bool` — start playing on `_ready()`
+- `loop: bool` — loop playback
+
+**Exposed methods:**
+- `play()` — start/resume playback
+- `pause()` — pause playback
+- `stop()` — stop and reset to frame 0
+- `seek(frame: int)` — jump to specific frame
+- `is_playing() -> bool`
+- `get_current_frame() -> int`
+- `get_frame_count() -> int`
+- `get_video_fps() -> float`
+
+**Signals:**
+- `playback_finished` — emitted when video reaches the end (non-looping)
+
+**Implementation approach:**
+- On `play()` or `_ready()` (if autoplay): open the .bv1d file using `BV1DDecoderCore`
+- In `_process(delta)`: accumulate time, decode next frame(s) when enough time has passed
+- Convert decoded frame (grayscale `std::vector<uint8_t>`) → Godot `Image` (FORMAT_L8) → update `ImageTexture`
+- Use `Image::FORMAT_L8` (single-channel 8-bit) which maps directly to the decoder output — no conversion needed
+
+**Frame timing logic:**
+```
+frame_duration = 1.0 / decoder.getFPS()
+time_accumulator += delta
+while time_accumulator >= frame_duration:
+    decode next frame
+    time_accumulator -= frame_duration
+```
+
+**Pixel data conversion (zero-copy path):**
+```cpp
+// decoder returns std::vector<uint8_t> of size width*height (values 0 or 255)
+PackedByteArray pba;
+pba.resize(width * height);
+memcpy(pba.ptrw(), frame_data.data(), frame_data.size());
+Ref<Image> img = Image::create_from_data(width, height, false, Image::FORMAT_L8, pba);
+texture->update(img);  // Update existing ImageTexture
+```
+
+### Step 4: Register types and build
+
+**register_types.cpp:**
+- Register `BV1DPlayerNode` with `ClassDB::register_class<BV1DPlayerNode>()`
+
+**SConstruct:**
+- Include `godot-cpp` via SConscript
+- Compile `bv1d_decoder_core.cpp` + GDExtension sources
+- Output to `project/addons/bv1d/bin/`
+
+**.gdextension file:**
+- Entry symbol, compatibility_minimum = 4.3
+- Platform-specific library paths (start with macOS)
+
+### Step 5: Create test Godot project
+
+- Minimal `project.godot` in `godot/project/`
+- A test scene with `BV1DPlayerNode` to verify playback
+
+## File Summary
+
+| File | Action |
+|------|--------|
+| `src/bv1d_decoder_core.hpp` | **Create** — pure C++ decoder |
+| `src/bv1d_decoder_core.cpp` | **Create** — implementation |
+| `src/bv1d_decoder.hpp` | **Modify** — thin OpenCV wrapper around core |
+| `src/bv1d_decoder.cpp` | **Modify** — delegate to core |
+| `src/bv1d_player.cpp` | **Modify** — update method names |
+| `godot/SConstruct` | **Create** — build config |
+| `godot/src/bv1d_player_node.hpp` | **Create** — Godot node |
+| `godot/src/bv1d_player_node.cpp` | **Create** — implementation |
+| `godot/src/register_types.hpp` | **Create** |
+| `godot/src/register_types.cpp` | **Create** |
+| `godot/project/project.godot` | **Create** — test project |
+| `godot/project/addons/bv1d/bv1d.gdextension` | **Create** |
+
+## Verification
+
+1. **Existing build still works:** `cd build && cmake .. && make` — both `video-dither` and `bv1d-player` should compile and work identically
+2. **GDExtension builds:** `cd godot && scons platform=macos` compiles without errors
+3. **Godot integration:** Open `godot/project/` in Godot 4.4, add `BV1DPlayerNode` to a scene, set a .bv1d file path, run — video plays at correct FPS
+4. **Seek works:** Call `seek()` from GDScript, verify correct frame displayed
+5. **Loop/autoplay:** Test property combinations
