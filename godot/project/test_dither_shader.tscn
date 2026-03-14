@@ -1,0 +1,12 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="ShaderMaterial" path="res://shaders/blue_noise_dither_material.tres" id="1"]
+[ext_resource type="Texture2D" path="res://icon.svg" id="2"]
+
+[node name="TestDitherShader" type="Node2D"]
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+position = Vector2(576, 324)
+scale = Vector2(4, 4)
+material = ExtResource("1")
+texture = ExtResource("2")

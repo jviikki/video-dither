@@ -1,0 +1,79 @@
+# Plan: Blue Noise Dithering Fragment Shader for Godot
+
+## Context
+
+The project uses Sierra error diffusion for 1-bit dithering, but that algorithm is inherently sequential and can't run on a GPU. Blue noise dithering is a GPU-friendly alternative that produces organic-looking results (unlike Bayer's regular grid pattern). The goal is a standalone `.gdshader` that can be applied to any Sprite2D or TextureRect to dither a grayscale input texture to 1-bit in real-time.
+
+## Approach
+
+A blue noise dither shader works by comparing each pixel's luminance against a corresponding value in a tiled blue noise texture. If luminance > threshold, output white; otherwise black. The blue noise texture provides spatially uniform but spectrally shaped randomness, avoiding the clumping of white noise and the patterns of ordered dithering.
+
+## Implementation
+
+### Step 1: Add a blue noise texture
+
+Download or generate a 64x64 blue noise texture (grayscale, 8-bit PNG). Store it at:
+- `godot/project/shaders/blue_noise_64.png`
+
+Import settings in Godot: **no filtering, no mipmaps, repeat enabled** — the texture tiles seamlessly and must not be interpolated.
+
+A 64x64 texture is standard for this use case — large enough to avoid visible tiling, small enough to be cache-friendly.
+
+### Step 2: Create the shader
+
+**File:** `godot/project/shaders/blue_noise_dither.gdshader`
+
+```glsl
+shader_type canvas_item;
+
+uniform sampler2D blue_noise : filter_nearest, repeat_enable;
+uniform float noise_scale = 1.0;  // Controls tiling density
+
+void fragment() {
+    float gray = dot(COLOR.rgb, vec3(0.299, 0.587, 0.114));
+    vec2 noise_uv = FRAGCOORD.xy / (vec2(textureSize(blue_noise, 0)) * noise_scale);
+    float threshold = texture(blue_noise, noise_uv).r;
+    float dithered = step(threshold, gray);
+    COLOR = vec4(vec3(dithered), COLOR.a);
+}
+```
+
+Key details:
+- `COLOR` is the input from the Sprite2D's texture (already processed by vertex stage)
+- Luminance extracted via standard BT.601 weights
+- Blue noise is sampled using screen-space coordinates (`FRAGCOORD`) so the pattern is stable regardless of camera/zoom
+- `noise_scale` uniform allows adjusting the apparent grain size
+- `step()` does the binary threshold — no branching
+- Alpha is preserved from the source texture
+
+### Step 3: Create a reusable ShaderMaterial resource
+
+**File:** `godot/project/shaders/blue_noise_dither_material.tres`
+
+A `.tres` resource file that bundles the shader + blue noise texture so users can drag-and-drop it onto any node's Material slot without manual setup.
+
+### Step 4: Create a test scene
+
+**File:** `godot/project/test_dither_shader.tscn`
+
+A minimal scene with:
+- A Sprite2D or TextureRect displaying a grayscale test image
+- The blue noise dither material applied
+- Demonstrates the shader working in real-time
+
+## File Summary
+
+| File | Action |
+|------|--------|
+| `godot/project/shaders/blue_noise_64.png` | **Create** — blue noise texture (generated via script) |
+| `godot/project/shaders/blue_noise_dither.gdshader` | **Create** — the fragment shader |
+| `godot/project/shaders/blue_noise_dither_material.tres` | **Create** — reusable material resource |
+| `godot/project/test_dither_shader.tscn` | **Create** — test scene |
+
+## Verification
+
+1. Open `godot/project/` in Godot 4.4
+2. Open `test_dither_shader.tscn`
+3. Run the scene — grayscale image should appear as 1-bit black and white with organic blue-noise dithering pattern
+4. Adjust `noise_scale` in the material inspector — grain size should change
+5. Apply the material to a BV1DPlayerNode with a grayscale source — verify it dithers video frames in real-time
