@@ -1,0 +1,19 @@
+This is a C++23 project that converts video files into 1-bit dithered video using Sierra error diffusion dithering. It depends on OpenCV 4.10+.
+
+Build: cd build && cmake .. && make
+Run: ./build/video-dither -h 480 -w 640 input.avi output.avi
+
+Source layout:
+- src/main.cpp — entry point, calls parseArguments() then processFramesConcurrently()
+- src/argparse.cpp/hpp — CLI argument parsing (short and long flag formats)
+- src/video.cpp/hpp — Sierra dithering algorithm and frame processing
+- src/concurrency.cpp/hpp — producer-consumer threading pipeline with worker pool
+- CMakeLists.txt — build config (C++23, OpenCV linkage)
+
+Architecture: Three-stage concurrent pipeline (producer → worker pool → consumer). Producer reads frames, workers dither in parallel, consumer writes in order via priority queue. Uses binary semaphores, condition variables, and atomic flags for synchronization.
+
+Key conventions:
+- Use C++23 features and standard library threading primitives
+- Follow existing code style (no namespaces, free functions, global synchronization primitives in concurrency module)
+- OpenCV for all video I/O and image manipulation
+- Output format is Motion JPEG, audio is discarded
