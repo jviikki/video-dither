@@ -1,0 +1,319 @@
+================================================================================
+  BV1D — Binary Video 1-bit Dithered
+  File Format Specification v1
+================================================================================
+
+1. OVERVIEW
+
+  BV1D is a lossless video container designed exclusively for 1-bit
+  (black and white) video. It exploits the 1-bit constraint at every level:
+
+    - Bit-packing:  8 pixels per byte (24x smaller than 8-bit BGR)
+    - Delta frames: XOR between consecutive frames (unchanged pixels become 0)
+    - Huffman coding: per-frame adaptive compression of the resulting bytes
+
+  The format supports random access via a frame index table.
+
+
+2. FILE STRUCTURE
+
+  ┌──────────────────────┐
+  │ File Header (32 B)   │
+  ├──────────────────────┤
+  │ Frame Index Table    │  12 bytes per frame
+  ├──────────────────────┤
+  │ Frame 0 (keyframe)   │
+  ├──────────────────────┤
+  │ Frame 1              │
+  ├──────────────────────┤
+  │ ...                  │
+  ├──────────────────────┤
+  │ Frame N-1            │
+  └──────────────────────┘
+
+  All multi-byte integers are stored in little-endian byte order.
+
+
+3. FILE HEADER (32 bytes)
+
+  Offset  Size  Field               Description
+  ──────  ────  ──────────────────  ─────────────────────────────────────────
+  0       4     magic               ASCII "BV1D" (0x42 0x56 0x31 0x44)
+  4       1     version             Format version (currently 1)
+  5       2     width               Frame width in pixels (uint16)
+  7       2     height              Frame height in pixels (uint16)
+  9       2     fps_num             FPS numerator (uint16)
+  11      2     fps_den             FPS denominator (uint16), e.g. 30000/1001
+  13      4     frame_count         Total number of frames (uint32)
+  17      2     keyframe_interval   Frames between keyframes (uint16)
+  19      1     flags               Bit flags (see below)
+  20      12    reserved            Reserved for future use, must be 0
+
+  Flags (bit field):
+    Bit 0:  pixel_order    0 = MSB first (default), 1 = LSB first
+    Bit 1:  color_meaning  0 = 0 is black / 1 is white (default)
+                           1 = 0 is white / 1 is black
+    Bits 2-7: reserved, must be 0
+
+  Notes:
+    - fps_den = 0 is invalid.
+    - Maximum resolution: 65535 x 65535.
+    - keyframe_interval = 1 means every frame is a keyframe (no delta coding).
+    - A keyframe_interval of 30-120 is recommended for typical video.
+
+
+4. FRAME INDEX TABLE
+
+  Immediately follows the file header. Contains one entry per frame.
+
+  Each entry (12 bytes):
+
+  Offset  Size  Field               Description
+  ──────  ────  ──────────────────  ─────────────────────────────────────────
+  0       8     offset              Byte offset of frame data from file start
+                                    (uint64)
+  8       4     size                Size of frame data in bytes (uint32)
+
+  Total index size = frame_count * 12 bytes.
+
+  The index enables random access: to decode frame N, seek to its offset
+  and read `size` bytes. For P-frames, the decoder must first reconstruct
+  all frames from the nearest preceding keyframe up to frame N.
+
+
+5. BIT-PACKING
+
+  Each frame's pixel data is packed into a continuous bitstream:
+
+    - Pixels are packed left-to-right, top-to-bottom (row-major order).
+    - 8 pixels are packed into each byte, MSB first (by default):
+        Bit 7 = leftmost pixel, Bit 0 = rightmost pixel.
+    - The bitstream is continuous across rows (no per-row padding).
+    - If (width * height) is not a multiple of 8, the trailing bits in
+      the last byte are set to 0.
+
+  Packed frame size = ceil(width * height / 8) bytes.
+
+  Example: for 640x480, packed size = 307200 / 8 = 38400 bytes.
+
+
+6. FRAME TYPES
+
+  Each frame is either a keyframe (I-frame) or a delta frame (P-frame).
+
+  6.1 Keyframe (type = 0x00)
+
+    Contains the full bit-packed pixel data for the frame, compressed
+    with Huffman coding (see section 7).
+
+    The first frame (frame 0) must always be a keyframe.
+    Additional keyframes appear at every `keyframe_interval` frames
+    (i.e., frames 0, K, 2K, 3K, ... where K = keyframe_interval).
+
+  6.2 Delta frame (type = 0x01)
+
+    Contains the XOR difference between this frame's bit-packed data
+    and the previous reconstructed frame's bit-packed data, compressed
+    with Huffman coding.
+
+    XOR properties exploited:
+      - Unchanged pixels produce 0 bits.
+      - For mostly-static video, delta frames are dominated by 0x00
+        bytes, which Huffman coding compresses to very few bits.
+      - XOR is its own inverse: original = previous XOR delta.
+
+    Decoding a delta frame:
+      1. Decompress the Huffman-coded data to obtain the XOR delta.
+      2. XOR each byte of the delta with the corresponding byte of
+         the previous reconstructed frame.
+      3. The result is the current frame's bit-packed pixel data.
+
+
+7. HUFFMAN COMPRESSION
+
+  Each frame's data (either raw bit-packed or XOR delta) is independently
+  compressed using canonical Huffman coding. This allows per-frame
+  adaptation to varying byte distributions.
+
+  7.1 Frame data layout
+
+    Offset  Size       Field             Description
+    ──────  ─────────  ────────────────  ──────────────────────────────────
+    0       1          frame_type        0x00 = keyframe, 0x01 = delta
+    1       4          unpacked_size     Uncompressed data size in bytes
+                                         (uint32) = ceil(W*H/8)
+    5       1          num_symbols       Number of distinct byte values
+                                         present minus 1 (uint8).
+                                         0 means 1 symbol, 255 means 256.
+    6       var        huffman_table     Canonical Huffman table
+                                         (see section 7.2)
+    var     var        bitstream         Huffman-coded data
+                                         (see section 7.3)
+
+  7.2 Canonical Huffman table encoding
+
+    The table is stored compactly using the following scheme:
+
+    a) Symbol list: `num_symbols + 1` bytes, each being a byte value
+       (0x00-0xFF) that appears in the data. Sorted by code length
+       (shortest first), then by byte value within the same length.
+
+    b) Code length list: `num_symbols + 1` bytes, each being the
+       Huffman code length in bits (1-16) for the corresponding symbol
+       in the symbol list.
+
+    Maximum code length is 16 bits. If the natural Huffman tree produces
+    codes longer than 16 bits, the encoder must use length-limited
+    Huffman construction (e.g., the package-merge algorithm).
+
+    To reconstruct the canonical codes:
+      1. Group symbols by code length.
+      2. Within each length group, symbols are in ascending byte order.
+      3. The first code of length L is derived from the last code of
+         length L-1: code = (prev_code + 1) << 1.
+      4. The very first code (shortest length) starts at 0.
+
+    Example:
+      Symbols: [0x00, 0x03, 0xFF, 0x80]
+      Lengths: [1,    3,    3,    4   ]
+
+      Length 1: 0x00 → code 0          (1 bit)
+      Length 3: 0x03 → code 100        (3 bits)
+                0xFF → code 101        (3 bits)
+      Length 4: 0x80 → code 1100       (4 bits)
+
+  7.3 Huffman bitstream
+
+    The compressed bitstream immediately follows the Huffman table.
+    Each byte of the uncompressed data is replaced by its Huffman code.
+    Codes are packed MSB-first into bytes. The last byte is padded with
+    zero bits if the total number of code bits is not a multiple of 8.
+
+    The decoder reads exactly `unpacked_size` symbols and then stops,
+    ignoring any padding bits in the final byte.
+
+  7.4 Special case: single symbol
+
+    If num_symbols = 0 (only one distinct byte value in the frame),
+    the code length list contains a single entry with length 0.
+    No bitstream follows — the decoder emits `unpacked_size` copies
+    of the single symbol. This efficiently handles solid-color frames
+    and fully static delta frames (all 0x00).
+
+
+8. ENCODING PROCEDURE
+
+  For each frame:
+
+    1. Convert the dithered grayscale image (0 or 255 per pixel) to
+       a bit-packed byte array as described in section 5.
+
+    2. If this is a keyframe:
+         data = bit-packed frame
+       If this is a delta frame:
+         data = bit-packed frame XOR previous reconstructed frame
+
+    3. Build a Huffman tree from the byte frequency distribution
+       of `data`. Apply length limiting if any code exceeds 16 bits.
+
+    4. Encode `data` using the Huffman codes.
+
+    5. Write the frame header, Huffman table, and bitstream.
+
+    6. Record the frame's file offset and total size in the index table.
+
+  The frame index table is written after all frames are encoded (the
+  encoder must buffer or seek back to fill in the index).
+
+
+9. DECODING PROCEDURE
+
+  1. Read and validate the file header (check magic, version).
+
+  2. Read the frame index table.
+
+  3. For sequential playback, decode frames 0 through N-1 in order:
+
+     a. Read frame type.
+     b. Reconstruct the Huffman table.
+     c. Decode the Huffman bitstream to obtain the uncompressed bytes.
+     d. If keyframe: the bytes are the bit-packed frame.
+        If delta: XOR the bytes with the previous frame's bit-packed data.
+     e. Unpack bits to pixels for display.
+
+  4. For random access to frame F:
+
+     a. Find the nearest keyframe K where K <= F and
+        K is a multiple of keyframe_interval.
+     b. Decode frames K through F sequentially.
+
+
+10. DESIGN RATIONALE
+
+  Bit-packing:
+    The source material is strictly 1-bit (Sierra dithered). Storing
+    8 pixels per byte is the natural representation — anything else
+    wastes 7/8 of the storage. This alone reduces a 640x480 BGR frame
+    from 921,600 bytes to 38,400 bytes.
+
+  XOR delta encoding:
+    In typical video, most pixels don't change between consecutive
+    frames. XOR produces bytes that are mostly 0x00 in static regions.
+    Even with dithered content (which re-dithers every frame), areas of
+    similar brightness will produce similar dither patterns, yielding
+    low-entropy delta frames. Keyframes are inserted periodically to
+    bound error propagation (though XOR is lossless, keyframes enable
+    random access and provide recovery points).
+
+  Huffman coding:
+    Huffman coding is optimal for symbol-by-symbol entropy coding.
+    After XOR delta encoding, the byte distribution is heavily skewed
+    toward 0x00, making Huffman extremely effective — a single bit
+    can represent the most common byte. Per-frame Huffman tables adapt
+    to varying content (high-motion scenes vs. static scenes).
+
+  Why not RLE:
+    Run-length encoding works well for long runs of identical values,
+    but dithered images have high spatial frequency — the bit patterns
+    change rapidly within a single frame. After bit-packing, the byte
+    values are diverse even in smooth regions. Huffman coding captures
+    the statistical structure (skewed byte distribution) more
+    effectively than RLE for this type of content. However, for delta
+    frames with very long runs of 0x00, Huffman naturally assigns a
+    1-bit code to 0x00, achieving similar compression to RLE without
+    the encoding overhead.
+
+  Why not DEFLATE/zlib:
+    DEFLATE (LZ77 + Huffman) would certainly work and compress well,
+    but it introduces an external dependency and obscures the format's
+    design. The BV1D format is intentionally self-contained, using only
+    the compression techniques that directly exploit the 1-bit video
+    structure. The XOR + Huffman pipeline is simple to implement,
+    requires no external libraries, and provides compression that is
+    well-matched to the data characteristics.
+
+
+11. EXAMPLE SIZE ANALYSIS
+
+  640x480 @ 30 fps, 10-second clip (300 frames):
+
+  Uncompressed 8-bit BGR:
+    921,600 bytes/frame * 300 = 276,480,000 bytes (~264 MB)
+
+  Bit-packed only (no compression):
+    38,400 bytes/frame * 300 = 11,520,000 bytes (~11 MB)
+
+  Bit-packed + XOR delta + Huffman (estimated):
+    Keyframe: ~20,000-35,000 bytes (Huffman on bit-packed frame)
+    Delta frame: ~2,000-15,000 bytes (depending on motion)
+    Estimated total: ~1.5-5 MB (varies widely with content)
+
+  Overhead:
+    File header:  32 bytes
+    Frame index:  300 * 12 = 3,600 bytes
+    Per-frame Huffman table: ~50-512 bytes (depends on symbol count)
+
+
+================================================================================
+  END OF SPECIFICATION
+================================================================================
