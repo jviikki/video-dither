@@ -22,6 +22,12 @@ message(STATUS "OpenCV_LIBS: ${OpenCV_LIBS}")
 
 target_link_libraries(${PROJECT_NAME} ${OpenCV_LIBS})
 
+add_executable(bv1d-player
+    src/bv1d_player.cpp
+    src/bv1d_decoder.cpp
+)
+target_link_libraries(bv1d-player ${OpenCV_LIBS})
+
 # include_directories(${CMAKE_SOURCE_DIR}/include)
 
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)

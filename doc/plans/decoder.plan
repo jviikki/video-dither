@@ -1,0 +1,139 @@
+# BV1D Decoder and Player Implementation Plan
+
+## Context
+
+The BV1D encoder already exists (`src/bv1d_encoder.cpp/hpp`). We need a decoder module and a standalone player program to play back `.bv1d` files using OpenCV's highgui.
+
+## New Files
+
+| File | Purpose |
+|------|---------|
+| `src/bv1d_decoder.hpp` | Decoder class declaration |
+| `src/bv1d_decoder.cpp` | Decoder implementation |
+| `src/bv1d_player.cpp` | Standalone player with `main()` |
+
+## Modified Files
+
+| File | Change |
+|------|--------|
+| `CMakeLists.txt` | Add `bv1d-player` executable target |
+
+---
+
+## 1. Decoder Class API (`src/bv1d_decoder.hpp`)
+
+```cpp
+class BV1DDecoder {
+public:
+    void open(const std::string& path);
+    cv::Mat readFrame();            // sequential read, returns empty Mat at end
+    cv::Mat seekFrame(int index);   // random access (decodes from nearest keyframe)
+    void close();
+
+    int getWidth() const;
+    int getHeight() const;
+    double getFPS() const;
+    int getFrameCount() const;
+    int getCurrentFrame() const;
+
+private:
+    struct FrameIndexEntry { uint64_t offset; uint32_t size; };
+    struct Header { version, width, height, fps_num, fps_den, frame_count,
+                    keyframe_interval, flags, index_offset };
+
+    std::ifstream file;
+    Header header;
+    std::vector<FrameIndexEntry> frame_index;
+    std::vector<uint8_t> prev_packed;  // previous frame's bit-packed data for delta
+    int current_frame = 0;
+    int last_decoded_frame = -1;
+
+    // Internal methods
+    void readHeader();
+    void readFrameIndex();
+    std::vector<uint8_t> readRawFrame(int index);
+    std::vector<uint8_t> huffmanDecode(const uint8_t* data, size_t size, uint32_t unpacked_size);
+    cv::Mat unpackBits(const std::vector<uint8_t>& packed);
+    cv::Mat decodeFrameAt(int index);
+};
+```
+
+## 2. Decoder Implementation (`src/bv1d_decoder.cpp`)
+
+### Header Reading
+- Read 32-byte header, validate magic "BV1D" and version 1
+- Read index table offset from reserved bytes at offset 20 (uint64)
+- Seek to index offset, read `frame_count` entries of (uint64 offset + uint32 size)
+
+### Huffman Decoding (inverse of encoder's `writeHuffmanEncoded` at line 299)
+1. Read `num_symbols = byte[0] + 1`
+2. Read `num_symbols` symbol bytes, then `num_symbols` code length bytes
+3. **Single-symbol case**: if `num_symbols == 1`, return `unpacked_size` copies of that symbol
+4. **Reconstruct canonical codes** (must mirror encoder lines 191-202):
+   - Pairs already sorted by (length, value)
+   - `code[0] = 0`, then `code[i] = (code[i-1] + 1) << (len[i] - len[i-1])`
+5. **Build binary decode tree** (array-based, max depth 16)
+6. **Decode bitstream** MSB-first, stop after `unpacked_size` symbols
+
+### Frame Decoding Pipeline (`decodeFrameAt`)
+1. Read raw frame bytes from file using index table
+2. Parse frame_type (byte 0): 0x00=keyframe, 0x01=delta
+3. Parse unpacked_size (bytes 1-4, uint32 LE)
+4. Huffman-decode remaining bytes
+5. If keyframe: result = decoded data
+6. If delta: XOR decoded data with `prev_packed`
+7. Store result as `prev_packed`, update `last_decoded_frame`
+8. Call `unpackBits()` to convert to `cv::Mat` (grayscale, 0 or 255)
+
+### Seek Logic
+- For `seekFrame(n)`: find nearest keyframe at `(n / keyframe_interval) * keyframe_interval`
+- If `last_decoded_frame >= keyframe_idx && last_decoded_frame < n`, decode from `last_decoded_frame + 1`
+- Otherwise decode from keyframe through `n`
+- This makes sequential `readFrame()` calls O(1) per frame
+
+### Bit Unpacking (inverse of encoder's `bitPack` at line 209)
+- MSB first: `bit = (packed[i/8] >> (7 - i%8)) & 1`
+- `pixel = bit ? 255 : 0`
+- Respect flags for color_meaning inversion
+
+## 3. Player (`src/bv1d_player.cpp`)
+
+Standalone `main()` program:
+
+```
+Usage: bv1d-player <file.bv1d>
+```
+
+- Open decoder, create `cv::namedWindow` with WINDOW_AUTOSIZE
+- Main loop: decode frames, display with `cv::imshow`, pace with `cv::waitKey(frame_delay_ms)`
+- **Controls**: Space = pause/resume, Q/ESC = quit, Right arrow (when paused) = step one frame
+- When paused, `waitKey(30)` for responsive UI without burning CPU
+- Window title: "BV1D Player - <filename>"
+
+## 4. CMake Changes
+
+Add after existing target:
+
+```cmake
+add_executable(bv1d-player
+    src/bv1d_player.cpp
+    src/bv1d_decoder.cpp
+)
+target_link_libraries(bv1d-player ${OpenCV_LIBS})
+```
+
+## 5. Implementation Order
+
+1. `src/bv1d_decoder.hpp` - class declaration
+2. `src/bv1d_decoder.cpp` - full decoder implementation
+3. `src/bv1d_player.cpp` - player program
+4. `CMakeLists.txt` - add bv1d-player target
+
+## 6. Verification
+
+1. Build: `cd build && cmake .. && make`
+2. Encode a test video: `./bin/video-dither -f bv1d input.avi test.bv1d`
+3. Play it back: `./bin/bv1d-player test.bv1d`
+4. Verify: correct dimensions, frame count, visual correctness, proper FPS timing
+5. Test pause (space), frame step (right arrow when paused), quit (q)
+6. Test with different video sizes and frame counts
