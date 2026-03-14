@@ -4,6 +4,8 @@ project(video-dither LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
+
 find_package(OpenCV REQUIRED)
 
 set(SOURCES
@@ -29,7 +31,5 @@ add_executable(bv1d-player
 target_link_libraries(bv1d-player ${OpenCV_LIBS})
 
 # include_directories(${CMAKE_SOURCE_DIR}/include)
-
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 message(STATUS "OpenCV version: ${OpenCV_VERSION}")
