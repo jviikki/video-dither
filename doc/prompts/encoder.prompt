@@ -1,0 +1,5 @@
+Come up with a detailed plan on how to write an encoder for the video format. This encoder should be
+  implemented in such way that it is easy to integrate into the video-dither program as an alternative output
+  format to the current Motion JPEG. The encoder should be a separate module, though, so that it is easy to
+  integrate into another program if needed. The output mode can be selected with -f / --format flag. E.g. -f bv1d
+  for the new format, -f mjpeg for Motion JPEG. Default should be Motion JPEG.

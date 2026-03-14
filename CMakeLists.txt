@@ -11,6 +11,7 @@ set(SOURCES
     src/argparse.cpp
     src/concurrency.cpp
     src/video.cpp
+    src/bv1d_encoder.cpp
 )
 
 add_executable(${PROJECT_NAME} ${SOURCES})

@@ -11,6 +11,7 @@
 
 #include "video.hpp"
 #include "concurrency.hpp"
+#include "bv1d_encoder.hpp"
 
 using namespace std;
 
@@ -37,6 +38,8 @@ binary_semaphore prioritySem{0};
 
 bool producerDone = false;
 bool workerDone = false;
+
+std::string outputFormat = "mjpeg";
 
 void producer(cv::VideoCapture cap) {
     int frameNumber = 0;
@@ -90,7 +93,9 @@ void worker(int id, int width, int height) {
         cv::resize(frame, frame, cv::Size(width, height), 0, 0, cv::INTER_AREA);
         cv::cvtColor(frame, frame, cv::COLOR_BGR2GRAY);
         processFrame(frame, palette);
-        cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR); // Convert back to BGR
+        if (outputFormat != "bv1d") {
+            cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR); // Convert back to BGR
+        }
 
         {
             lock_guard<mutex> lock(priorityMutex);
@@ -102,7 +107,7 @@ void worker(int id, int width, int height) {
     }
 }
 
-void consumer(cv::VideoWriter out, int totalFrames) {
+void consumer(std::function<void(const cv::Mat&)> writeFrame, int totalFrames) {
     int frameNumber = 0;
 
     while (true) {
@@ -131,7 +136,7 @@ void consumer(cv::VideoWriter out, int totalFrames) {
 
         prioritySem.acquire(); // Signal space in the priority queue
 
-        out.write(result.second);
+        writeFrame(result.second);
         std::cout
             << "Writing frame: " << frameNumber << " / " << totalFrames
             << " " << static_cast<int>(static_cast<double>(frameNumber) / totalFrames * 100) << "%\r";
@@ -165,20 +170,30 @@ void processFramesConcurrently(const CommandLineArgs& args) {
         << "Input file: " << args.input_file << " (" << totalFrames << " frames)" << std::endl
         << "Codec: " << codec << std::endl
         << "FPS: " << fps << std::endl
-        << "Resolution: " << inputWidth << "x" << inputHeight << " -> " << outputWidth << "x" << outputHeight << std::endl;
+        << "Resolution: " << inputWidth << "x" << inputHeight << " -> " << outputWidth << "x" << outputHeight << std::endl
+        << "Output format: " << args.format << std::endl;
 
-    cv::VideoWriter out(
-        args.output_file,
-        cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
-        // input_fourcc,
-        fps,
-        cv::Size(outputWidth, outputHeight),
-        true
-    );
+    outputFormat = args.format;
 
+    std::function<void(const cv::Mat&)> writeFrameFn;
+    cv::VideoWriter out;
+    BV1DEncoder bv1dEncoder;
 
-    if (!out.isOpened()) {
-        throw std::invalid_argument("Error opening output video file.");
+    if (args.format == "bv1d") {
+        bv1dEncoder.open(args.output_file, outputWidth, outputHeight, fps, 1);
+        writeFrameFn = [&bv1dEncoder](const cv::Mat& f) { bv1dEncoder.writeFrame(f); };
+    } else {
+        out.open(
+            args.output_file,
+            cv::VideoWriter::fourcc('M', 'J', 'P', 'G'),
+            fps,
+            cv::Size(outputWidth, outputHeight),
+            true
+        );
+        if (!out.isOpened()) {
+            throw std::invalid_argument("Error opening output video file.");
+        }
+        writeFrameFn = [&out](const cv::Mat& f) { out.write(f); };
     }
 
     std::cout << "Number of workers: " << NUM_WORKERS << std::endl;
@@ -190,12 +205,12 @@ void processFramesConcurrently(const CommandLineArgs& args) {
         workers.emplace_back(worker, i, outputWidth, outputHeight);
     }
 
-    thread consumerThread(consumer, out, totalFrames);
+    thread consumerThread(consumer, writeFrameFn, totalFrames);
 
     producerThread.join();
 
-    for (auto& worker : workers) {
-        worker.join();
+    for (auto& w : workers) {
+        w.join();
     }
 
     {
@@ -205,6 +220,10 @@ void processFramesConcurrently(const CommandLineArgs& args) {
 
     priorityCv.notify_one(); // Wake up the consumer
     consumerThread.join();
+
+    if (args.format == "bv1d") {
+        bv1dEncoder.close();
+    }
 
     std::cout << std::endl;
 }

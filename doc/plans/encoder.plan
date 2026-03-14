@@ -1,0 +1,123 @@
+# Plan: BV1D Encoder Implementation
+
+## Context
+
+The video-dither program outputs Motion JPEG via OpenCV's VideoWriter. We need to add a BV1D encoder as an alternative output format, selectable via `-f bv1d`. The encoder must be a standalone module (no dependency on the concurrency pipeline) so it can be reused in other programs. It only depends on OpenCV for the `cv::Mat` input type.
+
+## Files to create
+
+### `src/bv1d_encoder.hpp` / `src/bv1d_encoder.cpp`
+
+Standalone encoder module. Public API:
+
+```cpp
+class BV1DEncoder {
+public:
+    void open(const std::string& path, int width, int height,
+              int fps_num, int fps_den, int keyframe_interval = 60);
+    void writeFrame(const cv::Mat& frame);  // grayscale CV_8U, pixels are 0 or 255
+    void close();                           // writes frame index, finalizes file
+};
+```
+
+Internal implementation broken into clear steps:
+
+1. **`bitPack(const cv::Mat& frame)`** → `vector<uint8_t>`
+   - Iterate pixels row-major, pack 8 per byte MSB-first
+   - Size: `ceil(width * height / 8)`
+
+2. **`xorDelta(current, previous)`** → `vector<uint8_t>`
+   - Byte-wise XOR of two bit-packed frames
+
+3. **Huffman encoding** (private helper functions):
+   - `buildFrequencyTable(data)` → `array<uint32_t, 256>`
+   - `buildCodeLengths(frequencies)` → `array<uint8_t, 256>` (code lengths per symbol, max 16)
+   - `buildCanonicalCodes(lengths)` → `array<uint16_t, 256>` (actual codes)
+   - `huffmanEncode(data, codes, lengths)` → writes table + bitstream to file
+
+4. **Frame writing**:
+   - Write frame type byte (0x00 or 0x01)
+   - Write unpacked_size (uint32)
+   - Write num_symbols (uint8)
+   - Write Huffman table (symbol list + length list)
+   - Write Huffman bitstream
+   - Record offset and size in frame index vector
+
+5. **`close()`**:
+   - Seek back to the frame index table position (right after the 32-byte header)
+   - Write all frame index entries
+   - (The header is written during `open()` with frame_count=0, then updated in `close()`)
+
+**Huffman code length limiting** (max 16 bits):
+- Build standard Huffman tree via priority queue
+- If max depth > 16: use iterative redistribution (shorten the longest codes
+  by stealing from the shortest, preserving the Kraft inequality).
+  This is rare with 256 symbols.
+
+**Special case handling**:
+- Single symbol: write num_symbols=0, one symbol byte, length=0, no bitstream
+- Empty frame: should not occur (width/height > 0 guaranteed by header)
+
+## Files to modify
+
+### `src/argparse.hpp`
+- Add `std::string format = "mjpeg";` field to `CommandLineArgs`
+
+### `src/argparse.cpp`
+- Parse `-f <format>` and `--format=<format>` flags
+- Validate: must be "mjpeg" or "bv1d", throw on unknown
+
+### `src/concurrency.cpp`
+Three changes:
+
+1. **Worker function** — skip `cv::cvtColor(frame, frame, cv::COLOR_GRAY2BGR)` when
+   format is "bv1d". The workers currently convert grayscale back to BGR solely for
+   VideoWriter. For BV1D, we need grayscale. Approach: add a global
+   `std::string outputFormat` set in `processFramesConcurrently()`, and make the
+   GRAY2BGR conversion conditional.
+
+2. **`processFramesConcurrently()`** — conditionally create either a `cv::VideoWriter`
+   or a `BV1DEncoder`:
+   ```
+   if format == "bv1d":
+       create BV1DEncoder, open it
+       launch consumer thread with a lambda that calls encoder.writeFrame()
+   else:
+       create VideoWriter (existing code)
+       launch consumer thread as before
+   ```
+
+3. **Consumer function** — instead of one consumer taking `cv::VideoWriter`, use
+   `std::function<void(const cv::Mat&)>` as the write callback. The consumer loop
+   stays the same, only the write call differs. This keeps the consumer logic
+   (priority queue draining, progress display) in one place.
+
+   Revised consumer signature:
+   ```cpp
+   void consumer(std::function<void(const cv::Mat&)> writeFrame, int totalFrames)
+   ```
+   - For MJPEG: `writeFrame = [&out](const cv::Mat& f) { out.write(f); }`
+   - For BV1D: `writeFrame = [&enc](const cv::Mat& f) { enc.writeFrame(f); }`
+
+### `CMakeLists.txt`
+- Add `src/bv1d_encoder.cpp` to the SOURCES list
+
+## Implementation order
+
+1. Add `-f` / `--format` flag to argparse
+2. Create `bv1d_encoder.hpp/cpp` with the full encoder
+   (bit-packing → XOR delta → Huffman → file writing)
+3. Integrate into `concurrency.cpp` (conditional format, consumer callback)
+4. Update `CMakeLists.txt`
+5. Build and test with a sample video
+
+## Verification
+
+1. Build: `cd build && cmake .. && make`
+2. Run with MJPEG (default, should work as before):
+   `./video-dither -h 480 -w 640 input.avi output.avi`
+3. Run with BV1D:
+   `./video-dither -f bv1d -h 480 -w 640 input.avi output.bv1d`
+4. Verify BV1D output: check file starts with "BV1D" magic, header fields are
+   correct, file size is reasonable (much smaller than MJPEG output)
+5. Hex-dump first 32 bytes to validate header structure

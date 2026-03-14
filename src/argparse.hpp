@@ -9,6 +9,7 @@ struct CommandLineArgs {
     std::optional<int> width;
     std::optional<int> colors;
     bool one_bit = false;
+    std::string format = "mjpeg";
     std::string input_file;
     std::string output_file;
 };

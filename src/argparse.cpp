@@ -35,6 +35,18 @@ CommandLineArgs parseArguments(int argc, char* argv[]) {
             } else {
                 args.width = std::stoi(arg.substr(8));
             }
+        } else if (arg == "-f" || arg.find("--format=") == 0) {
+            if (arg == "-f") {
+                if (i + 1 >= arguments.size()) {
+                    throw std::invalid_argument("Missing value for -f");
+                }
+                args.format = arguments[++i];
+            } else {
+                args.format = arg.substr(9);
+            }
+            if (args.format != "mjpeg" && args.format != "bv1d") {
+                throw std::invalid_argument("Unknown format: " + args.format + " (must be 'mjpeg' or 'bv1d')");
+            }
         } else if (arg == "--1-bit") {
             args.one_bit = true;
         } else if (arg.find("--colors=") == 0) {

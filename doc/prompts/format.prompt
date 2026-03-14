@@ -1,0 +1,10 @@
+Currently, the program creates the output video using OpenCV's VideoWriter. I want to design an alternative
+  custom output format that takes into consideration that each pixel in the video contains 1 bit of data.
+  Therefore a single byte of data can contain 8 pixels. This means that a frame of 640x480 pixels can be
+  represented with 38400 bytes (unless I miscalculated). In additional to that, I would like to apply some
+  sort of lossless compression on the data. I have been thinking of something like encoding long continuous
+  ranges of single color with number instead of individual pixels. Also using Huffman coding has crossed my
+  mind. But if you know of better alternatives, please feel free to suggest. You can also try to take
+  advantage of diffs between subsequent frames, although I imagine that would be difficult for lossless
+  videos. Come up with a detailed specification for such video file format. Design the file format to be
+  lossless and as small as possible for 1-bit videos. Store the specification in doc/FORMAT.txt
